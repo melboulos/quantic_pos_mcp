@@ -13,30 +13,18 @@ mcp/                        MCP client config example
 
 ## Data model
 
-Bucket `quantic`, scope `pos`. Four collections, one per docType:
+The dataset follows **Quantic's production document shapes** (from sample docs they provided): uppercase UUIDs,
+`docType:UUID` keys, epoch-ms timestamps, raw-double money, `commChannel` per merchant. Bucket `quantic`,
+scope `pos`, one collection per docType (`order` docs live in `orders`, since ORDER is reserved in SQL++):
 
-| Collection     | docType        | Contents |
-|----------------|----------------|----------|
-| `orders`       | `order`        | Order header: location, channel, server, guests, totals, timing |
-| `cart`         | `cart`         | Line items: menu item, category, qty, price, modifiers, voids/comps, cost |
-| `payment`      | `payment`      | Tenders in `transactionList` (sale, void, return), tips, settlement flag |
-| `orderSummary` | `orderSummary` | Reporting rollup with embedded `cartList` and margin |
+`orders`, `check`, `cart`, `payment`, `orderSummary`, `transactionDetail`, `batchClose`, `timeManagement`,
+`giftTransactionDetail`, `rewardHistory`, `signature`, `stockHistory`, `catalogLog`, `auditLog`,
+plus `location`, `item`, `employee` (assumed shapes).
 
-20 restaurants (2 hot locations carry ~70% of traffic), a 62-item casual-dining menu,
-dine-in / takeout / delivery channels, realistic dayparts and weekly patterns.
-Every doc carries `businessDate`, `dayOfWeek`, `hourOfDay` and `daypart` for easy filtering.
-
-### Planted demo stories
-
-| Story | Where to look |
-|---|---|
-| New item taking off | Nashville Hot Chicken Sandwich, launched 28 days before end date |
-| Seasonal LTO | Pumpkin Cheesecake, last 22 days |
-| Declining item | Quinoa Power Bowl, steady decline across the window |
-| 86'd item | Grilled Atlantic Salmon missing at LOC_002 (Nashville) for 4 days |
-| Void outlier | One server at LOC_001 (Charlotte) voids ~12% of lines |
-| Delivery surge | LOC_009 (Austin) delivery share climbs from ~18% to 40%+ |
-| Daypart contrast | Molten Chocolate Cake sells at dinner, almost never at lunch |
+The merchant base mirrors Quantic's market: mostly independent restaurants (8 concepts), mid-Atlantic heavy,
+onboarding, churn, feature adoption and staff turnover over time, plus a 20-location demo chain,
+**Ember & Oak Kitchen** (commChannel `847`), carrying the planted stories.
+See **ASSUMPTIONS.md** for every assumption and the story list, and **docs/mcp_demo_prompt.md** for the AI context.
 
 ## Setup
 
@@ -50,20 +38,20 @@ cp .env.example .env        # then edit .env with your cluster details
 ## Load data
 
 ```bash
-# preview: no cluster needed, prints realism stats + writes sample docs to output/
-python3 loader/quantic_pos_gen.py --dry_run --num_orders 5000
+# preview: projected doc counts per collection, mix by concept/channel/year, one sample doc per type
+python loader/quantic_pos_gen.py --dry_run --merchants 300 --days 1095 --end_date 2026-10-07
 
-# load 100K orders (~500K cart lines); creates scope/collections if missing
-python3 loader/quantic_pos_gen.py --num_orders 100000 --workers 8 --end_date 2026-10-07
+# demo size: 60 merchants, 1 year (~90M docs)
+python loader/quantic_pos_gen.py --merchants 60 --days 365 --end_date 2026-10-07 --processes 4
 
-# grow later - keep the same --end_date so stories line up
-python3 loader/quantic_pos_gen.py --start_offset 100000 --num_orders 50000 --end_date 2026-10-07
+# ~1.1B docs: 300 merchants (~700 locations), 3 years - run on a VM in the cluster's region
+python loader/quantic_pos_gen.py --merchants 300 --days 1095 --end_date 2026-10-07 --processes 16 --workers 8
 ```
 
-Output is deterministic: same arguments, same data, regardless of worker count.
-If your user can't manage collections, create them in the UI and add `--no_create`.
-
-Then run `sql/quantic_indexes.sql` in the Capella Query Workbench.
+Phases run in order: `reference` (location/item/employee), `daily` (batch closes, time clock, inventory,
+catalog and audit logs), `orders` (everything per order). `--merchants`, `--days`, `--end_date` and `--seed` define
+the dataset; keep them identical across runs. Resume orders with `--phases orders --start_offset N`.
+Start from an empty bucket (ideally Magma), then run `sql/quantic_indexes.sql`.
 
 ## MCP server
 
@@ -74,9 +62,8 @@ Then run `sql/quantic_indexes.sql` in the Capella Query Workbench.
    The client config lives outside this repo, so secrets stay out of git.
 3. For Capella, allow the MCP host's IP in the cluster's allowed IP list.
 
-Questions to try: *What were the top 10 items last week? How is the Nashville Hot Chicken
-Sandwich trending since launch? Which servers have unusual void rates? Why did salmon sales
-drop in Nashville? How is delivery share changing in Austin?*
+Questions to try: *Which merchants look at risk of churning? How has online ordering adoption grown across the
+platform? How is Ember & Oak's new Nashville Hot Chicken Sandwich doing? Why did salmon disappear in Fishtown?
+Which servers have unusual void rates? How did Pumpkin Cheesecake do this fall vs last fall?*
 
-> Query tip for the assistant: order headers are in `quantic.pos.orders`; use `isVoided = false`
-> on `cart` for sales figures; time filters work best on `businessDate` (YYYY-MM-DD).
+> Give the assistant the context in `docs/mcp_demo_prompt.md` (field conventions, time zones, sales filters).

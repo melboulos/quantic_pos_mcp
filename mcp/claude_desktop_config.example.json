@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "quantic-couchbase": {
+      "command": "uvx",
+      "args": ["couchbase-mcp-server"],
+      "env": {
+        "CB_CONNECTION_STRING": "couchbases://cb.xxxxxxxx.cloud.couchbase.com",
+        "CB_USERNAME": "mcp_reader",
+        "CB_PASSWORD": "change-me",
+        "CB_MCP_READ_ONLY_MODE": "true"
+      }
+    }
+  }
+}

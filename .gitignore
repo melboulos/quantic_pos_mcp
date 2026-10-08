@@ -5,6 +5,7 @@
 *certificate*.txt
 
 # generated
+*.log
 output/
 __pycache__/
 *.pyc

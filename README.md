@@ -53,6 +53,18 @@ catalog and audit logs), `orders` (everything per order). `--merchants`, `--days
 the dataset; keep them identical across runs. Resume orders with `--phases orders --start_offset N`.
 Start from an empty bucket (ideally Magma), then run `sql/quantic_indexes.sql`.
 
+### Load tips (learned from the first full load)
+
+- **Run big loads near the cluster.** Documents average about 2 KB (`orderSummary` about 5.7 KB), so a laptop load is
+  limited by upload bandwidth, not Capella: about 3,000 docs/s, or about 8 hours for the 60-merchant demo. From a VM in
+  the cluster's cloud region it is many times faster. Adding data nodes does not help when the network is the bottleneck.
+- **Keep the laptop awake** on long runs: `caffeinate -i python loader/quantic_pos_gen.py ... 2>&1 | tee load.log`.
+- **Build indexes after the load**, not before: every write then goes straight in.
+- **Reruns are safe.** Output is deterministic, so rerunning with the same arguments overwrites documents with identical
+  content. Changing `--merchants`, `--days`, `--end_date` or `--seed` produces a different dataset: drop the scope first.
+- **Connection timeouts** at startup are usually the cluster being paused or your IP missing from Capella's allowed list.
+- **After recreating the scope**, re-check that the read-only `mcp` user still has access to `quantic.pos`.
+
 ## MCP server
 
 1. Create a read-only database user for MCP (e.g. `mcp_reader` with Data Reader +

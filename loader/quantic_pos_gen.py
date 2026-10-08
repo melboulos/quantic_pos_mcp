@@ -89,6 +89,17 @@ LAST_DATE = END_DATE - timedelta(days=1)              # last day of data (index 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("quantic")
 
+
+class _QuietSDK(logging.Filter):
+    """Drop the SDK's periodic slow-operation reports; keep progress and real errors."""
+    def filter(self, record):
+        return not (record.levelno < logging.WARNING and str(record.getMessage()).lstrip().startswith('{"kv"'))
+
+
+logging.getLogger("couchbase").setLevel(logging.WARNING)
+for _h in logging.getLogger().handlers:
+    _h.addFilter(_QuietSDK())
+
 DOC_TYPES = ["order", "check", "cart", "payment", "orderSummary", "transactionDetail", "batchClose",
              "timeManagement", "giftTransactionDetail", "rewardHistory", "signature", "stockHistory",
              "catalogLog", "auditLog", "location", "item", "employee"]

@@ -40,6 +40,76 @@ BUILD INDEX ON quantic.pos.cart(ix_cart_loc_date, ix_cart_name_date, ix_cart_voi
 
 
 /* =====================================================================
+   CUSTOMER QUERY PATTERNS - rewritten for collections
+   The four queries Quantic struggled with on `_default`, with the index each one needs.
+   Use named parameters ($loc, $cc, ...) so plans are prepared and cached.
+   ===================================================================== */
+
+-- Step 3: indexes for the customer queries (deferred, then built per collection)
+CREATE INDEX ix_cart_order ON quantic.pos.cart(orderID, locationID, commChannel) WHERE isPurged = 0 WITH {"defer_build": true};
+CREATE INDEX ix_stock_loc_item ON quantic.pos.stockHistory(locationID, itemID, commChannel, LOWER(vendorName)) WITH {"defer_build": true};
+CREATE INDEX ix_os_loc_cc_date ON quantic.pos.orderSummary(locationID, commChannel, dateCreated DESC) WHERE closeType != "noSale" WITH {"defer_build": true};
+CREATE INDEX ix_payment_settle ON quantic.pos.payment(locationID, commChannel, DISTINCT ARRAY FLATTEN_KEYS(t.isForSettle, t.dateCreated, t.transactionType) FOR t IN transactionList END) WITH {"defer_build": true};
+BUILD INDEX ON quantic.pos.cart(ix_cart_order);
+BUILD INDEX ON quantic.pos.stockHistory(ix_stock_loc_item);
+BUILD INDEX ON quantic.pos.orderSummary(ix_os_loc_cc_date);
+BUILD INDEX ON quantic.pos.payment(ix_payment_settle);
+
+-- Q1. Cart lines of one order.
+-- Was: SELECT * FROM quantic WHERE docType='cart' AND locationID=... AND commChannel=... AND isPurged=0 AND orderID=...
+-- Change: collection replaces the docType filter; index leads with orderID (a UUID, the most selective key),
+-- so it also serves lookups by orderID alone. c.* returns plain documents instead of {"quantic": {...}} wrappers.
+SELECT c.*
+FROM quantic.pos.cart c
+WHERE c.orderID = $orderID AND c.locationID = $loc AND c.commChannel = $cc AND c.isPurged = 0;
+
+-- Q2. Inventory history for one item, filtered by vendor.
+-- Was: ... FROM quantic WHERE docType='cart' AND ... AND itemID=... AND lower(vendorName) LIKE '%test%'
+-- Change: every selected field (stockID, qtyRemaining, qtyReceived, reorderPoint, entryType, upc, sku, alu, margin,
+-- vendorName, manufactureName ...) belongs to stockHistory documents, not cart, so the original returned mostly
+-- empty rows. Run it against stockHistory. The '%test%' leading wildcard cannot narrow an index range, so the index
+-- narrows on locationID + itemID and evaluates LOWER(vendorName) inside the index before fetching.
+-- For free-text vendor search across all items, use a Search (FTS) index instead.
+SELECT s.empName, s.`type`, s.commChannel, s.transferFrom, s.transferTo, s.`transfer`, s.entryType, s.qtyRemaining,
+       s.modifiedByName, s.unit, s.reason, s.created, s.dateCreated, s.modified, s.vendorName, s.manufactureName,
+       s.margin, s.cog, s.upc, s.sku, s.alu, s.qtyReceived, s.reorderPoint, s.size, s.note, s.qtySold, s.itemID, s.stockID
+FROM quantic.pos.stockHistory s
+WHERE s.locationID = $loc AND s.itemID = $itemID AND s.commChannel = $cc AND LOWER(s.vendorName) LIKE "%test%"
+ORDER BY s.dateCreated DESC;
+
+-- Q3. Order summaries for a location (excluding no-sale drawer opens).
+-- Was: ... FROM `quantic where docType='orderSummary' AND locationID=... AND commChannel=... AND closeType != 'noSale'
+-- (stray backtick in the original). Main problem: no date range, so it returns every summary the location ever had,
+-- each carrying its whole cartList (~5.7 KB). With retained history that grows without bound.
+-- Change: bounded by date and paginated; the partial index matches closeType != "noSale" and is sorted by date
+-- descending, so ORDER BY + LIMIT stop early without sorting.
+SELECT s.orderID, s.refNumber, s.orderTotal AS `total`, s.total AS checkTotal, s.paymentType, s.dateCreated,
+       s.empName, s.cartList, s.transactionType, s.paidAmount
+FROM quantic.pos.orderSummary s
+WHERE s.locationID = $loc AND s.commChannel = $cc AND s.closeType != "noSale"
+  AND s.dateCreated BETWEEN $fromMs AND $toMs
+ORDER BY s.dateCreated DESC
+LIMIT 100 OFFSET $offset;
+
+-- Q4. Unsettled, non-return transactions in a time window, by payment type and time.
+-- Was: SELECT results.transactionList, ... FROM quantic AS results WHERE results.docType='payment' AND ...
+--      AND (ANY trans IN transactionList SATISFIES trans.isForSettle=0 AND trans.transactionType NOT IN ['return']
+--      AND trans.dateCreated BETWEEN ... END) ORDER BY trans.paymentType, trans.dateCreated ASC
+-- Bugs: (1) `trans` only exists inside ANY ... END, so ORDER BY trans.paymentType sorts on a missing value and the
+-- ordering silently does nothing. (2) It returns the whole transactionList, including transactions that did not match.
+-- Change: ANY narrows documents through the array index (equality on isForSettle, range on dateCreated);
+-- UNNEST then emits only the matching transactions, so ORDER BY works on real values.
+SELECT p.orderID, p.terminalID, p.totalAmount, p.gratuityAmount, p.driverID, p.extraChargeList,
+       t.transactionID, t.paymentType, t.transactionType, t.paidAmount, t.dateCreated
+FROM quantic.pos.payment p UNNEST p.transactionList t
+WHERE p.locationID = $loc AND p.commChannel = $cc
+  AND ANY x IN p.transactionList SATISFIES x.isForSettle = 0 AND x.dateCreated BETWEEN $fromMs AND $toMs
+      AND x.transactionType != "return" END
+  AND t.isForSettle = 0 AND t.dateCreated BETWEEN $fromMs AND $toMs AND t.transactionType != "return"
+ORDER BY t.paymentType, t.dateCreated;
+
+
+/* =====================================================================
    DEMO QUERIES
    ===================================================================== */
 

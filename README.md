@@ -62,6 +62,10 @@ Start from an empty bucket (ideally Magma), then run `sql/quantic_indexes.sql`.
 - **Build indexes after the load**, not before: every write then goes straight in.
 - **Reruns are safe.** Output is deterministic, so rerunning with the same arguments overwrites documents with identical
   content. Changing `--merchants`, `--days`, `--end_date` or `--seed` produces a different dataset: drop the scope first.
+- **Repair failed writes** without a full rerun: `python loader/quantic_pos_gen.py <same args> --repair_log load.log`
+  regenerates everything (CPU only) and writes only the keys the earlier run logged as `upsert failed`.
+- **`TemporaryFailException` errors** mean the cluster pushed back (usually bucket memory). Check memory, resident ratio
+  and disk write queue in Capella; at larger sizes use Magma and/or more memory.
 - **Connection timeouts** at startup are usually the cluster being paused or your IP missing from Capella's allowed list.
 - **After recreating the scope**, re-check that the read-only `mcp` user still has access to `quantic.pos`.
 

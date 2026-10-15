@@ -78,6 +78,8 @@ parser.add_argument("--dry_run", action="store_true")
 parser.add_argument("--dry_run_sample", type=int, default=8000)
 parser.add_argument("--sample_out", default="output/sample_docs.json")
 parser.add_argument("--progress_every", type=int, default=250000)
+parser.add_argument("--repair_log", default=None,
+                    help="regenerate and write ONLY the keys a previous run logged as 'upsert failed' in this log file")
 args = parser.parse_args()
 
 SEED = args.seed
@@ -1672,7 +1674,7 @@ class Loader:
             time.sleep(1)
         log.warning("collections not visible in manifest yet; upserts will retry")
 
-    def upsert_many(self, name, docs, retries=4):
+    def upsert_many(self, name, docs, retries=7):
         col = self.cols[name]
         res = col.upsert_multi(docs)
         if res.all_ok:
@@ -1688,7 +1690,7 @@ class Loader:
                 except Exception as e:  # noqa: BLE001
                     if i == retries - 1:
                         log.error(f"upsert failed {name}/{key}: {e}")
-                    time.sleep(0.05 * (2 ** i))
+                    time.sleep(min(30.0, 0.5 * (2 ** i)))   # give a busy cluster time to recover
         return written
 
 # =========================================================
@@ -1700,6 +1702,13 @@ PHASES = {
     "daily": (make_daily, lambda: (0, DAILY_TOTAL)),
     "orders": (make_order, lambda: (args.start_offset, NUM_ORDERS)),
 }
+
+
+REPAIR_KEYS = None
+if args.repair_log:
+    import re
+    REPAIR_KEYS = set(re.findall(r"upsert failed [A-Za-z]+/([A-Za-z]+:[0-9A-F-]{36})", open(args.repair_log).read()))
+    log.info(f"repair mode: {len(REPAIR_KEYS)} keys from {args.repair_log}")
 
 
 class Progress:
@@ -1743,6 +1752,8 @@ def worker(loader, maker, start, end, progress):
         for doc_type, docs in maker(u).items():
             name = DOC_TO_COLLECTION[doc_type]
             for d in docs:
+                if REPAIR_KEYS is not None and d["_id"] not in REPAIR_KEYS:
+                    continue
                 bufs[name][d["_id"]] = dict(sorted(d.items()))   # source docs are key-sorted
             if len(bufs[name]) >= args.flush_size:
                 flush(name)

@@ -4,31 +4,39 @@
    Times are epoch ms in UTC -> use MILLIS_TO_TZ(x, location.timeZone) for local time.
    Sales lines: cart.closeType = "paid". Channel: serviceAreaType 1 dine-in, 2 takeout/counter,
    3 delivery (in-house or 3rd party), 4 online ordering. A merchant = commChannel.
-   At ~1B docs: create these deferred + partitioned (see bottom) and BUILD together.
+   Paste only statements (no comment lines) into the Query Workbench; it splits on semicolons.
+   At ~1B docs: also partition the large indexes (see bottom).
    ===================================================================== */
 
-CREATE INDEX ix_location ON quantic.pos.location(commChannel, locationID, locationName, businessName, restaurantType, state, timeZone, isActive, dateCreated);
-CREATE INDEX ix_item ON quantic.pos.item(locationID, name, catName, superCatName, itemPrice, cog);
-CREATE INDEX ix_employee ON quantic.pos.employee(locationID, empID, empName, roleName, hireDate, terminationDate, isActive);
+-- Step 1: register every index (instant). Nothing is built yet; indexes show as "Created".
+CREATE INDEX ix_location ON quantic.pos.location(commChannel, locationID, locationName, businessName, restaurantType, state, timeZone, isActive, dateCreated) WITH {"defer_build": true};
+CREATE INDEX ix_item ON quantic.pos.item(locationID, name, catName, superCatName, itemPrice, cog) WITH {"defer_build": true};
+CREATE INDEX ix_employee ON quantic.pos.employee(locationID, empID, empName, roleName, hireDate, terminationDate, isActive) WITH {"defer_build": true};
+CREATE INDEX ix_orders_date ON quantic.pos.orders(dateCreated, commChannel, locationID, serviceAreaType, subTotal, totalDiscount, total, guest) WHERE isClosed = 1 AND closeType = "paid" WITH {"defer_build": true};
+CREATE INDEX ix_orders_loc_date ON quantic.pos.orders(locationID, dateCreated, serviceAreaType, serviceAreaName, subTotal, totalDiscount, total, guest) WHERE isClosed = 1 AND closeType = "paid" WITH {"defer_build": true};
+CREATE INDEX ix_os_loc_date ON quantic.pos.orderSummary(locationID, dateCreated, paymentType, serviceAreaType, total, tipAmount, totalSurcharge) WITH {"defer_build": true};
+CREATE INDEX ix_payment_txn ON quantic.pos.payment(DISTINCT ARRAY [t.transactionType, t.paymentType] FOR t IN transactionList END, locationID, dateCreated) WITH {"defer_build": true};
+CREATE INDEX ix_tm_loc_date ON quantic.pos.timeManagement(locationID, clockIn, empID, workingHours, hourlyRate) WITH {"defer_build": true};
+CREATE INDEX ix_catalog_loc_date ON quantic.pos.catalogLog(locationID, dateCreated, masterName, keyChanges) WITH {"defer_build": true};
+CREATE INDEX ix_audit_date ON quantic.pos.auditLog(dateCreated, commChannel, module) WITH {"defer_build": true};
+CREATE INDEX ix_cart_loc_date ON quantic.pos.cart(locationID, dateCreated, name, quantity, subTotal, totalDiscount) WHERE closeType = "paid" WITH {"defer_build": true};
+CREATE INDEX ix_cart_name_date ON quantic.pos.cart(name, dateCreated, locationID, quantity, subTotal) WHERE closeType = "paid" WITH {"defer_build": true};
+CREATE INDEX ix_cart_void ON quantic.pos.cart(locationID, dateCreated, createdBy, saleEmpName, voidReason) WHERE closeType = "void" WITH {"defer_build": true};
+CREATE INDEX ix_cart_emp ON quantic.pos.cart(locationID, dateCreated, createdBy, saleEmpName, closeType) WITH {"defer_build": true};
 
-CREATE INDEX ix_orders_date ON quantic.pos.orders(dateCreated, commChannel, locationID, serviceAreaType, subTotal, totalDiscount, total, guest)
-  WHERE isClosed = 1 AND closeType = "paid";
-CREATE INDEX ix_orders_loc_date ON quantic.pos.orders(locationID, dateCreated, serviceAreaType, serviceAreaName, subTotal, totalDiscount, total, guest)
-  WHERE isClosed = 1 AND closeType = "paid";
-
-CREATE INDEX ix_cart_loc_date ON quantic.pos.cart(locationID, dateCreated, name, quantity, subTotal, totalDiscount)
-  WHERE closeType = "paid";
-CREATE INDEX ix_cart_name_date ON quantic.pos.cart(name, dateCreated, locationID, quantity, subTotal)
-  WHERE closeType = "paid";
-CREATE INDEX ix_cart_void ON quantic.pos.cart(locationID, dateCreated, createdBy, saleEmpName, voidReason)
-  WHERE closeType = "void";
-CREATE INDEX ix_cart_emp ON quantic.pos.cart(locationID, dateCreated, createdBy, saleEmpName, closeType);
-
-CREATE INDEX ix_os_loc_date ON quantic.pos.orderSummary(locationID, dateCreated, paymentType, serviceAreaType, total, tipAmount, totalSurcharge);
-CREATE INDEX ix_payment_txn ON quantic.pos.payment(DISTINCT ARRAY [t.transactionType, t.paymentType] FOR t IN transactionList END, locationID, dateCreated);
-CREATE INDEX ix_tm_loc_date ON quantic.pos.timeManagement(locationID, clockIn, empID, workingHours, hourlyRate);
-CREATE INDEX ix_catalog_loc_date ON quantic.pos.catalogLog(locationID, dateCreated, masterName, keyChanges);
-CREATE INDEX ix_audit_date ON quantic.pos.auditLog(dateCreated, commChannel, module);
+-- Step 2: build. One statement per collection builds all its indexes in a single pass over the data
+-- (cart: one scan of ~40M docs instead of four). Each returns immediately; watch Data Tools -> Indexes
+-- go Created -> Building -> Ready.
+BUILD INDEX ON quantic.pos.location(ix_location);
+BUILD INDEX ON quantic.pos.item(ix_item);
+BUILD INDEX ON quantic.pos.employee(ix_employee);
+BUILD INDEX ON quantic.pos.orders(ix_orders_date, ix_orders_loc_date);
+BUILD INDEX ON quantic.pos.orderSummary(ix_os_loc_date);
+BUILD INDEX ON quantic.pos.payment(ix_payment_txn);
+BUILD INDEX ON quantic.pos.timeManagement(ix_tm_loc_date);
+BUILD INDEX ON quantic.pos.catalogLog(ix_catalog_loc_date);
+BUILD INDEX ON quantic.pos.auditLog(ix_audit_date);
+BUILD INDEX ON quantic.pos.cart(ix_cart_loc_date, ix_cart_name_date, ix_cart_void, ix_cart_emp);
 
 
 /* =====================================================================
@@ -120,10 +128,8 @@ ORDER BY salesPerLaborHour DESC;
 
 
 /* =====================================================================
-   BILLION-DOC SCALE: create the large indexes deferred + partitioned, then build together
+   BILLION-DOC SCALE: same deferred pattern, plus hash partitioning on the large indexes, e.g.
    ===================================================================== */
 -- CREATE INDEX ix_cart_loc_date ON quantic.pos.cart(locationID, dateCreated, name, quantity, subTotal, totalDiscount)
 --   PARTITION BY HASH(locationID) WHERE closeType = "paid" WITH {"defer_build": true, "num_partition": 8};
--- (same pattern for ix_cart_name_date, ix_orders_date, ix_orders_loc_date, ix_os_loc_date)
--- BUILD INDEX ON quantic.pos.cart(ix_cart_loc_date, ix_cart_name_date, ix_cart_void, ix_cart_emp);
--- BUILD INDEX ON quantic.pos.orders(ix_orders_date, ix_orders_loc_date);
+-- (same for ix_cart_name_date, ix_orders_date, ix_orders_loc_date, ix_os_loc_date), then the BUILD statements above.

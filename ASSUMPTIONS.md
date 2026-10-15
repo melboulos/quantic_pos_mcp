@@ -23,9 +23,13 @@ these assumptions were made. Each one is easy to change in `loader/quantic_pos_g
 - **Voids**: `cart.closeType = "void"` plus `voidReason` / `voidedBy`; check `voidedBalance`. Whole-order void:
   `order.closeType = "void"`, no payment docs.
 - **Discounts / modifiers**: `discountList` and `modifierList` entry shapes.
-- **Refunds**: `transactionList` entry with `transactionType: "refund"`, `isForReturn: 1`.
+- **Returns / refunds**: `transactionList` entry with `transactionType: "return"` (confirmed by Quantic's queries),
+  `isForReturn: 1`.
+- **No-sale drawer opens**: orderSummary with `closeType: "noSale"` and no items (confirmed by Quantic's queries;
+  remaining fields assumed). About 0.3% of in-store volume.
 - **Second gateway** `dejavoo` for ~15% of merchants (Quantic is processor-agnostic).
 - `batchClose` totals approximate the day's card volume per terminal; they do not reconcile exactly to orders.
+- Vendor names include `TEST KITCHEN SUPPLY`, so Quantic's `LOWER(vendorName) LIKE '%test%'` query finds rows.
 - `isArchived` = 1 on signatures / gift transactions older than 180 days.
 
 ## Customer base (synthetic, modeled on Quantic's public profile)

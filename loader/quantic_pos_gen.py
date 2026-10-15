@@ -1208,7 +1208,7 @@ def make_order(g):
                 rf = summary_lines[0][0]["subTotal"] if summary_lines else 0
                 if rf:
                     base_txn = txns[0]
-                    txns.append(dict(base_txn, actualPaidAmount=rf, paidAmount=rf, currentAction="refund", transactionType="refund",
+                    txns.append(dict(base_txn, actualPaidAmount=rf, paidAmount=rf, currentAction="return", transactionType="return",
                                      isForReturn=1, transactionID=uid(rng), parentTransactionID=base_txn["transactionID"],
                                      dateCreated=stamp(close_ms + rng.randint(1, 48) * 3_600_000, app, rng),
                                      refundReason=rng.choice(REFUND_REASONS)))
@@ -1397,7 +1397,7 @@ def _txn_detail(rng, td, loc, m, order_id, ref, check_id, app, created_by, role_
 AVG_TICKET = {"casual": 62, "mexican": 45, "pizzeria": 34, "cafe": 11, "qsr": 15, "bar": 38, "truck": 16, "asian": 32}
 ROLE_SHIFT = {"Manager": (9, 9), "General Manager": (9, 9), "Owner": (9, 10), "Server": (15, 6), "Bartender": (15, 7),
               "Host": (16, 5), "Cashier": (10, 7), "Barista": (6, 7), "Driver": (16, 5)}
-VENDORS = ["", "", "SYSCO", "US FOODS", "PERFORMANCE FOOD GROUP", "RESTAURANT DEPOT", "LOCAL PRODUCE CO"]
+VENDORS = ["", "", "SYSCO", "US FOODS", "PERFORMANCE FOOD GROUP", "RESTAURANT DEPOT", "LOCAL PRODUCE CO", "TEST KITCHEN SUPPLY"]
 
 _ranges, _acc = [], 0
 for _l in LOCATIONS:
@@ -1487,6 +1487,34 @@ def make_daily(u):
                     "payRollId": "", "roleID": e["roleID"], "status": "clockIn" if open_now else "clockOut",
                     "terminalID": rng.choice(loc["terminals"])["terminalID"], "timeID": tid,
                     "workingHours": 0 if open_now else (cout - cin) / 3_600_000})
+
+    # ---- no-sale drawer opens (orderSummary with closeType "noSale") ----
+    in_store = [a for a in loc["areas"] if a["serviceAreaType"] in (1, 2)]
+    if dayw > 0 and in_store:
+        for _ in range(int(dayw * 0.003 + rng.random())):
+            e = employee_at(loc, m["spec"]["takers"].get(2, m["spec"]["takers"][1]), idx, rng)
+            area = rng.choice(in_store)
+            t = rng.choice(loc["terminals"])
+            u_ = uid(rng)
+            ms = stamp(midnight + rng.randint(9 * 60, 22 * 60) * 60_000, app, rng)
+            name = f"{e['first']} {e['last']}"
+            docs["orderSummary"].append({
+                "_id": f"orderSummary:{u_}", "appType": app, "authCode": "", "billingAddressID": "", "cardHolderName": "",
+                "cardNumber": "", "cardType": "", "cartList": [], "checkID": "", "checkName": "", "checkTotalDiscount": 0,
+                "checkTotalSurcharge": 0, "closeType": "noSale", "commChannel": m["commChannel"], "createdBy": e["empID"],
+                "custEmail": "", "custPhoneNum": "", "customerName": "", "dateClosed": ms, "dateCreated": ms, "deliveryDate": 0,
+                "docType": "orderSummary", "empName": name, "extraChargeList": [], "gateWay": "cash",
+                "gatewayID": loc["cashGatewayID"], "guest": 0, "isClosed": 1, "isForSettle": 0, "isOrderClosed": 1,
+                "isPurged": 0, "locationID": loc["locationID"], "orderDateCreated": ms, "orderID": "", "orderNumber": "",
+                "orderSummaryID": u_, "osDateCreated": ms + 3000, "osVersion": 1.1, "paidAmount": 0, "paidSurcharge": 0,
+                "paidTax": 0, "paymentID": "", "paymentType": "cash", "refNumber": "", "roleID": e["roleID"],
+                "roleName": e["role"], "saleEmpName": name, "saleReceivingEmp": e["empID"], "saleReceivingRoleID": e["roleID"],
+                "saleReceivingRoleName": e["role"], "serviceAreaID": area["serviceAreaID"],
+                "serviceAreaName": area["serviceAreaName"], "serviceAreaType": area["serviceAreaType"], "subTotal": 0,
+                "surchargeLabel": "", "tax": 0, "terminalID": t["terminalID"], "tipAmount": 0, "tipEmpName": name,
+                "tipReceivingRoleID": e["roleID"], "tipReceivingRoleName": e["role"], "tipSurcharge": 0, "tipedAt": ms,
+                "token": "", "total": 0, "totalExtraCharge": 0, "totalPaidAmount": 0, "totalSurcharge": 0,
+                "transactionID": u_, "transactionRef": "", "transactionType": "noSale"})
 
     # ---- inventory receipts (Tuesday deliveries) + the salmon 86 story ----
     out = STORIES["outage"]

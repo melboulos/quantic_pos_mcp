@@ -20,7 +20,7 @@ CREATE INDEX ix_tm_loc_date ON quantic.pos.timeManagement(locationID, clockIn, e
 CREATE INDEX ix_catalog_loc_date ON quantic.pos.catalogLog(locationID, dateCreated, masterName, keyChanges) WITH {"defer_build": true};
 CREATE INDEX ix_audit_date ON quantic.pos.auditLog(dateCreated, commChannel, module) WITH {"defer_build": true};
 CREATE INDEX ix_cart_loc_date ON quantic.pos.cart(locationID, dateCreated, name, quantity, subTotal, totalDiscount) WHERE closeType = "paid" WITH {"defer_build": true};
-CREATE INDEX ix_cart_name_date ON quantic.pos.cart(name, dateCreated, locationID, quantity, subTotal) WHERE closeType = "paid" WITH {"defer_build": true};
+CREATE INDEX ix_cart_name_date ON quantic.pos.cart(name, dateCreated, commChannel, locationID, quantity, subTotal) WHERE closeType = "paid" WITH {"defer_build": true};
 CREATE INDEX ix_cart_void ON quantic.pos.cart(locationID, dateCreated, createdBy, saleEmpName, voidReason) WHERE closeType = "void" WITH {"defer_build": true};
 CREATE INDEX ix_cart_emp ON quantic.pos.cart(locationID, dateCreated, createdBy, saleEmpName, closeType) WITH {"defer_build": true};
 
@@ -99,14 +99,15 @@ LIMIT 100 OFFSET $offset;
 -- ordering silently does nothing. (2) It returns the whole transactionList, including transactions that did not match.
 -- Change: ANY narrows documents through the array index (equality on isForSettle, range on dateCreated);
 -- UNNEST then emits only the matching transactions, so ORDER BY works on real values.
+-- The ANY variable must match the index definition's variable (t), or the array keys are ignored.
 SELECT p.orderID, p.terminalID, p.totalAmount, p.gratuityAmount, p.driverID, p.extraChargeList,
-       t.transactionID, t.paymentType, t.transactionType, t.paidAmount, t.dateCreated
-FROM quantic.pos.payment p UNNEST p.transactionList t
+       tx.transactionID, tx.paymentType, tx.transactionType, tx.paidAmount, tx.dateCreated
+FROM quantic.pos.payment p UNNEST p.transactionList tx
 WHERE p.locationID = $loc AND p.commChannel = $cc
-  AND ANY x IN p.transactionList SATISFIES x.isForSettle = 0 AND x.dateCreated BETWEEN $fromMs AND $toMs
-      AND x.transactionType != "return" END
-  AND t.isForSettle = 0 AND t.dateCreated BETWEEN $fromMs AND $toMs AND t.transactionType != "return"
-ORDER BY t.paymentType, t.dateCreated;
+  AND ANY t IN p.transactionList SATISFIES t.isForSettle = 0 AND t.dateCreated BETWEEN $fromMs AND $toMs
+      AND t.transactionType != "return" END
+  AND tx.isForSettle = 0 AND tx.dateCreated BETWEEN $fromMs AND $toMs AND tx.transactionType != "return"
+ORDER BY tx.paymentType, tx.dateCreated;
 
 
 /* =====================================================================

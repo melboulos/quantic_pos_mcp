@@ -51,7 +51,8 @@ python loader/quantic_pos_gen.py --merchants 300 --days 1095 --end_date 2026-10-
 Phases run in order: `reference` (location/item/employee), `daily` (batch closes, time clock, inventory,
 catalog and audit logs), `orders` (everything per order). `--merchants`, `--days`, `--end_date` and `--seed` define
 the dataset; keep them identical across runs. Resume orders with `--phases orders --start_offset N`.
-Start from an empty bucket (ideally Magma), then run `sql/quantic_indexes.sql`.
+Start from an empty bucket (ideally Magma), then run `sql/quantic_indexes.sql`, then `sql/fix_v2_data.sql` (only for
+data loaded before the generator fixes). `sql/demo_queries.sql` has the tested demo queries with hard-coded IDs.
 
 ### Load tips (learned from the first full load)
 

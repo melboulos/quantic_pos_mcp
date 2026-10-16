@@ -206,7 +206,7 @@ FOOD, BEV, ALC = "FOOD", "BEVERAGES", "ALCOHOL"
 
 CONCEPTS = {
     "casual": {
-        "weight": 22, "rate": (140, 320), "price_style": 0.05,
+        "weight": 22, "rate": (110, 240), "price_style": 0.05,
         "menu": {
             "APPETIZERS": (FOOD, [("CRISPY CALAMARI", 14.95, 6), ("SPINACH ARTICHOKE DIP", 12.95, 8), ("BUFFALO WINGS", 13.95, 10),
                                   ("LOADED POTATO SKINS", 11.95, 5), ("TRUFFLE FRIES", 9.95, 7), ("PRETZEL BITES", 10.95, 6)]),
@@ -245,7 +245,7 @@ CONCEPTS = {
                   ("DoorDash", 3, 4), ("Uber Eats", 3, 2)],
         "guests": [1, 2, 3, 4, 5, 6, 8], "guest_w": [12, 40, 17, 18, 7, 4, 2],
         "courses": True, "cash_share": .14,
-        "roles": {"Manager": 2, "Server": 10, "Bartender": 3, "Host": 2},
+        "roles": {"Manager": 2, "Server": 10, "Bartender": 3, "Host": 2, "Line Cook": 8, "Prep Cook": 3, "Dishwasher": 3},
         "takers": {1: ["Server", "Server", "Server", "Bartender"], 2: ["Host", "Bartender"]},
     },
     "mexican": {
@@ -276,7 +276,7 @@ CONCEPTS = {
                   ("DoorDash", 3, 6), ("Uber Eats", 3, 4)],
         "guests": [1, 2, 3, 4, 5, 6], "guest_w": [14, 40, 18, 18, 6, 4],
         "courses": False, "cash_share": .2,
-        "roles": {"Manager": 1, "Server": 6, "Bartender": 2, "Cashier": 2},
+        "roles": {"Manager": 1, "Server": 8, "Bartender": 2, "Cashier": 2, "Line Cook": 7, "Prep Cook": 3, "Dishwasher": 2},
         "takers": {1: ["Server", "Server", "Server", "Bartender"], 2: ["Cashier"]},
     },
     "pizzeria": {
@@ -304,7 +304,7 @@ CONCEPTS = {
                   ("DoorDash", 3, 7), ("Grubhub", 3, 5)],
         "guests": [1, 2, 3, 4, 5, 6], "guest_w": [30, 30, 14, 16, 6, 4],
         "courses": False, "cash_share": .2, "shared_mains": 2.5,
-        "roles": {"Manager": 1, "Cashier": 4, "Driver": 3},
+        "roles": {"Manager": 1, "Cashier": 4, "Driver": 3, "Pizza Maker": 4, "Dishwasher": 1},
         "takers": {1: ["Cashier"], 2: ["Cashier"]},
     },
     "cafe": {
@@ -328,7 +328,7 @@ CONCEPTS = {
         "areas": [("Counter", 2, 82), ("Online TakeOut", 4, 18)],
         "guests": [1, 2, 3], "guest_w": [70, 24, 6],
         "courses": False, "cash_share": .1,
-        "roles": {"Manager": 1, "Barista": 6},
+        "roles": {"Manager": 1, "Barista": 6, "Line Cook": 2},
         "takers": {1: ["Barista"], 2: ["Barista"]},
     },
     "qsr": {
@@ -350,7 +350,7 @@ CONCEPTS = {
         "areas": [("Counter", 2, 55), ("Drive Thru", 2, 15), ("Online TakeOut", 4, 15), ("DoorDash", 3, 9), ("Uber Eats", 3, 6)],
         "guests": [1, 2, 3, 4], "guest_w": [50, 30, 12, 8],
         "courses": False, "cash_share": .12,
-        "roles": {"Manager": 2, "Cashier": 6},
+        "roles": {"Manager": 2, "Cashier": 8, "Line Cook": 9},
         "takers": {1: ["Cashier"], 2: ["Cashier"]},
     },
     "bar": {
@@ -376,7 +376,7 @@ CONCEPTS = {
         "areas": [("Bar", 1, 70), ("Main Dining", 1, 22), ("Take Out", 2, 8)],
         "guests": [1, 2, 3, 4, 5], "guest_w": [30, 35, 15, 14, 6],
         "courses": False, "cash_share": .25, "happy_hour": (16, 18),
-        "roles": {"Manager": 1, "Bartender": 5, "Server": 3},
+        "roles": {"Manager": 1, "Bartender": 6, "Server": 4, "Line Cook": 3, "Barback": 2},
         "takers": {1: ["Bartender", "Bartender", "Server"], 2: ["Bartender"]},
     },
     "truck": {
@@ -394,7 +394,7 @@ CONCEPTS = {
         "areas": [("Window", 2, 90), ("Online TakeOut", 4, 10)],
         "guests": [1, 2, 3], "guest_w": [70, 24, 6],
         "courses": False, "cash_share": .3,
-        "roles": {"Owner": 1, "Cashier": 2},
+        "roles": {"Owner": 1, "Cashier": 2, "Line Cook": 1},
         "takers": {1: ["Cashier"], 2: ["Cashier", "Owner"]},
     },
     "asian": {
@@ -420,7 +420,7 @@ CONCEPTS = {
         "areas": [("Main Dining", 1, 30), ("Take Out", 2, 35), ("Online TakeOut", 4, 18), ("DoorDash", 3, 10), ("Grubhub", 3, 7)],
         "guests": [1, 2, 3, 4, 5], "guest_w": [30, 35, 15, 14, 6],
         "courses": False, "cash_share": .18,
-        "roles": {"Manager": 1, "Server": 4, "Cashier": 2},
+        "roles": {"Manager": 1, "Server": 4, "Cashier": 2, "Line Cook": 4, "Sushi Chef": 2, "Dishwasher": 1},
         "takers": {1: ["Server"], 2: ["Cashier"]},
     },
 }
@@ -584,8 +584,10 @@ def _employee_timeline(rng, open_idx, mean_tenure):
 
 
 TENURE = {"Owner": 100000, "General Manager": 900, "Manager": 600, "Server": 260, "Bartender": 320, "Host": 150,
-          "Cashier": 190, "Barista": 210, "Driver": 200}
-HOURLY = {"Owner": 0, "Manager": 24, "Server": 3.5, "Bartender": 5.5, "Host": 14, "Cashier": 15, "Barista": 15.5, "Driver": 13}
+          "Cashier": 190, "Barista": 210, "Driver": 200, "Line Cook": 280, "Prep Cook": 220, "Dishwasher": 150,
+          "Pizza Maker": 300, "Barback": 180, "Sushi Chef": 500}
+HOURLY = {"Owner": 0, "Manager": 24, "Server": 3.5, "Bartender": 5.5, "Host": 14, "Cashier": 15, "Barista": 15.5, "Driver": 13,
+          "Line Cook": 18, "Prep Cook": 16, "Dishwasher": 14.5, "Pizza Maker": 16.5, "Barback": 12, "Sushi Chef": 22}
 
 used_channels, used_names = set(), set()
 MERCHANTS, LOCATIONS, EMPLOYEES = [], [], []
@@ -675,7 +677,7 @@ for m in range(max(1, args.merchants)):
             open_idx = onboard - k * 20
             if k + 1 == STORIES["new_store"]["loc"]:
                 open_idx = idx_of_days_ago(STORIES["new_store"]["opened_days_ago"])
-        rate = W.uniform(*spec["rate"]) * math.exp(W.gauss(0, 0.35)) * (1.35 if show else 1.0)
+        rate = W.uniform(*spec["rate"]) * math.exp(W.gauss(0, 0.35)) * (1.1 if show else 1.0)
         n_term = max(1, min(6, 1 + int(rate // 90)))
         tname = {"casual": "POS Station", "mexican": "POS Station", "bar": "Bar Terminal", "cafe": "Register",
                  "qsr": "Register", "pizzeria": "Counter", "truck": "iPad", "asian": "POS Station"}[concept]
@@ -1394,9 +1396,11 @@ def _txn_detail(rng, td, loc, m, order_id, ref, check_id, app, created_by, role_
 # DAILY DOCS  (one unit = one location-day)
 # =========================================================
 
-AVG_TICKET = {"casual": 62, "mexican": 45, "pizzeria": 34, "cafe": 11, "qsr": 15, "bar": 38, "truck": 16, "asian": 32}
+AVG_TICKET = {"casual": 72, "mexican": 62, "pizzeria": 35, "cafe": 11.5, "qsr": 25, "bar": 39, "truck": 21, "asian": 40}
+SPLH_TARGET = {"casual": 70, "mexican": 65, "pizzeria": 75, "cafe": 55, "qsr": 80, "bar": 90, "truck": 70, "asian": 70}
 ROLE_SHIFT = {"Manager": (9, 9), "General Manager": (9, 9), "Owner": (9, 10), "Server": (15, 6), "Bartender": (15, 7),
-              "Host": (16, 5), "Cashier": (10, 7), "Barista": (6, 7), "Driver": (16, 5)}
+              "Host": (16, 5), "Cashier": (10, 7), "Barista": (6, 7), "Driver": (16, 5), "Line Cook": (10, 8),
+              "Prep Cook": (8, 7), "Dishwasher": (15, 7), "Pizza Maker": (11, 8), "Barback": (17, 7), "Sushi Chef": (11, 8)}
 VENDORS = ["", "", "SYSCO", "US FOODS", "PERFORMANCE FOOD GROUP", "RESTAURANT DEPOT", "LOCAL PRODUCE CO", "TEST KITCHEN SUPPLY"]
 
 _ranges, _acc = [], 0
@@ -1465,28 +1469,31 @@ def make_daily(u):
                 "terminalName": t["terminalName"], "tipCount": int(cnt * 0.6) if concept in ("casual", "mexican", "bar") else int(cnt * 0.25),
                 "totalRefund": round(rng.uniform(8, 60), 2) if refunds else 0, "totalTransactions": 0, "voidCount": rng.choice([0, 0, 0, 1])})
 
-    # ---- time clock ----
+    # ---- time clock: staff the day to a realistic sales-per-labor-hour (SPLH) ----
     if dayw > 0:
-        load = min(1.2, dayw / max(1.0, loc["rate"] * SCALE))
-        for role, slots in loc["slots"].items():
-            n_on = min(len(slots), max(1, round(len(slots) * (0.35 + 0.35 * load))))
-            for slot in rng.sample(slots, n_on):
-                i = max(0, bisect.bisect_right(slot["starts"], idx) - 1)
-                e = slot["emps"][i]
-                start_h, length = ROLE_SHIFT.get(role, (10, 7))
-                cin = midnight + int((start_h + rng.uniform(-1.5, 1.5)) * 3_600_000)
-                hours = max(2.5, length + rng.uniform(-2, 2))
-                cout = cin + int(hours * 3_600_000)
-                open_now = days_ago == 1 and rng.random() < 0.25
-                tid = uid(rng)
-                docs["timeManagement"].append({
-                    "_id": f"timeManagement:{tid}", "appType": app, "clockIn": stamp(cin, app, rng),
-                    "clockOut": 0 if open_now else stamp(cout, app, rng), "commChannel": m["commChannel"],
-                    "docType": "timeManagement", "empID": e["empID"], "fileNumber": "0", "hourlyRate": e["rate"],
-                    "isPurged": 0, "locationID": loc["locationID"], "otHourlyRate": round(e["rate"] * 1.5, 2) if e["rate"] else 0,
-                    "payRollId": "", "roleID": e["roleID"], "status": "clockIn" if open_now else "clockOut",
-                    "terminalID": rng.choice(loc["terminals"])["terminalID"], "timeID": tid,
-                    "workingHours": 0 if open_now else (cout - cin) / 3_600_000})
+        target_hours = dayw * AVG_TICKET[concept] / SPLH_TARGET[concept] * rng.uniform(0.85, 1.15)
+        all_slots = [(role, slot) for role, slots in loc["slots"].items() for slot in slots]
+        n_shifts = max(1, min(len(all_slots), round(target_hours / 7.2)))
+        managers = [x for x in all_slots if x[0] in ("Manager", "Owner", "General Manager")]
+        others = [x for x in all_slots if x[0] not in ("Manager", "Owner", "General Manager")]
+        chosen = managers[:1] + rng.sample(others, min(len(others), n_shifts - min(1, len(managers))))
+        for role, slot in chosen:
+            i = max(0, bisect.bisect_right(slot["starts"], idx) - 1)
+            e = slot["emps"][i]
+            start_h, length = ROLE_SHIFT.get(role, (10, 7))
+            cin = midnight + int((start_h + rng.uniform(-1.5, 1.5)) * 3_600_000)
+            hours = max(2.5, length + rng.uniform(-2, 2))
+            cout = cin + int(hours * 3_600_000)
+            open_now = days_ago == 1 and rng.random() < 0.25
+            tid = uid(rng)
+            docs["timeManagement"].append({
+                "_id": f"timeManagement:{tid}", "appType": app, "clockIn": stamp(cin, app, rng),
+                "clockOut": 0 if open_now else stamp(cout, app, rng), "commChannel": m["commChannel"],
+                "docType": "timeManagement", "empID": e["empID"], "fileNumber": "0", "hourlyRate": e["rate"],
+                "isPurged": 0, "locationID": loc["locationID"], "otHourlyRate": round(e["rate"] * 1.5, 2) if e["rate"] else 0,
+                "payRollId": "", "roleID": e["roleID"], "status": "clockIn" if open_now else "clockOut",
+                "terminalID": rng.choice(loc["terminals"])["terminalID"], "timeID": tid,
+                "workingHours": 0 if open_now else (cout - cin) / 3_600_000})
 
     # ---- no-sale drawer opens (orderSummary with closeType "noSale") ----
     in_store = [a for a in loc["areas"] if a["serviceAreaType"] in (1, 2)]
@@ -1561,7 +1568,8 @@ def make_daily(u):
     if is_out_loc and days_ago in (out["from_days_ago"], out["to_days_ago"] - 1):
         it = m["itemByBase"][out["item"]]
         going_out = days_ago == out["from_days_ago"]
-        docs["catalogLog"].append(_catalog_log(rng, loc, m, stamp(midnight + rng.randint(11, 18) * 3_600_000, app, rng), it,
+        log_h = rng.randint(11, 15) if going_out else rng.randint(8, 9)      # restock before opening
+        docs["catalogLog"].append(_catalog_log(rng, loc, m, stamp(midnight + log_h * 3_600_000, app, rng), it,
                                                "itemCount,enableItemCount",
                                                [f"key:itemCount##oldValue:{'4.0' if going_out else '0.0'}##updatedValue:{'0.0' if going_out else '60.0'}",
                                                 f"key:enableItemCount##oldValue:{'0.0' if going_out else '1.0'}##updatedValue:{'1.0' if going_out else '0.0'}"],

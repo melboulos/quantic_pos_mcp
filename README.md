@@ -79,6 +79,11 @@ data loaded before the generator fixes). `sql/demo_queries.sql` has the tested d
    The client config lives outside this repo, so secrets stay out of git.
 3. For Capella, allow the MCP host's IP in the cluster's allowed IP list.
 
+4. **Analytics (full history):** the Couchbase MCP server only reaches the Query and Data services, so
+   `mcp/analytics_server.py` adds a small read-only server for the Analytics service (`run_analytics_query`,
+   `list_analytics_datasets`) over `quantic.pos_history.*`. Add the `quantic-analytics` block from the example config.
+   It runs with `uv run --script` (dependencies pinned in the file header); the MCP user needs Analytics read access.
+
 Questions to try: *Which merchants look at risk of churning? How has online ordering adoption grown across the
 platform? How is Ember & Oak's new Nashville Hot Chicken Sandwich doing? Why did salmon disappear in Fishtown?
 Which servers have unusual void rates? How did Pumpkin Cheesecake do this fall vs last fall?*

@@ -2,12 +2,28 @@
   "mcpServers": {
     "quantic-couchbase": {
       "command": "uvx",
-      "args": ["couchbase-mcp-server"],
+      "args": [
+        "couchbase-mcp-server"
+      ],
       "env": {
         "CB_CONNECTION_STRING": "couchbases://cb.xxxxxxxx.cloud.couchbase.com",
         "CB_USERNAME": "mcp_reader",
         "CB_PASSWORD": "change-me",
         "CB_MCP_READ_ONLY_MODE": "true"
+      }
+    },
+    "quantic-analytics": {
+      "command": "/opt/homebrew/bin/uv",
+      "args": [
+        "run",
+        "--quiet",
+        "--script",
+        "/Users/melboulos/git/quantic_pos_mcp/mcp/analytics_server.py"
+      ],
+      "env": {
+        "CB_CONNECTION_STRING": "couchbases://cb.xxxxxxxx.cloud.couchbase.com",
+        "CB_USERNAME": "mcp_reader",
+        "CB_PASSWORD": "change-me"
       }
     }
   }

@@ -123,7 +123,7 @@ def main():
         while True:
             _, m = q(cluster, f"DELETE FROM {B}.pos.`{coll}` x USE INDEX ({idx}) WHERE {where} LIMIT {args.batch}",
                      metrics=True)
-            k = m.mutation_count() or 0
+            k = int(m.mutation_count() or 0)  # SDK returns UnsignedInt64
             done += k
             rate = done / max(1e-6, time.time() - t0)
             log.info(f"{coll}: deleted {done:,}/{n:,} ({rate:,.0f}/s)")

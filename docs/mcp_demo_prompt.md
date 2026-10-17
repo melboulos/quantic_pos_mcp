@@ -19,8 +19,9 @@ Two MCP servers, two services (pick by time range):
   anything selective. Use the conventions above.
 - `quantic-analytics` (Analytics service, `run_analytics_query`): anything longer than ~90 days, year over year, or platform-wide
   across many months. Read `quantic.pos_history.*` (orders, cart, check, payment, orderSummary, transactionDetail: full history,
-  never purged) and `quantic.pos.location` / `item` / `employee` (reference data). Never send a full-year or platform-wide scan to
-  the Query service: it exceeds the time limit.
+  never purged) and `quantic.pos.location` / `item` / `employee` (reference data).
+- The hot tier is purged to 90 days (cutoff 2026-07-08). A question reaching further back MUST go to `quantic-analytics`: on the
+  Query service it would silently return incomplete (wrong) results, not just run slowly.
 
 Analytics SQL++ rules (tested on this cluster):
 - No `MILLIS_TO_TZ` / `DATE_FORMAT_STR`. Use `datetime_from_unix_time_in_ms(ms)` with `get_year`, `get_month`,

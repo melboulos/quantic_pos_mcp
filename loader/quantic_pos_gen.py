@@ -78,6 +78,21 @@ parser.add_argument("--dry_run", action="store_true")
 parser.add_argument("--dry_run_sample", type=int, default=8000)
 parser.add_argument("--sample_out", default="output/sample_docs.json")
 parser.add_argument("--progress_every", type=int, default=250000)
+parser.add_argument("--hot_days", type=int, default=0,
+                    help="retention mode: >0 routes the 6 transactional collections by age. Docs newer than hot_days go "
+                         "to --scope with expiry dateCreated + hot_days; older ones go to --history_scope without TTL. "
+                         "0 = legacy load (everything to --scope, no TTL)")
+parser.add_argument("--route", choices=["split", "history", "hot"], default="split",
+                    help="with --hot_days: split = write both targets in one pass; history = only the old docs that go "
+                         "straight to history; hot = everything else (hot-window docs with TTL + non-retention docs)")
+parser.add_argument("--history_scope", default="pos_history")
+parser.add_argument("--live", action="store_true",
+                    help="stream 'just happened' orders continuously into --scope (with TTL when --hot_days > 0)")
+parser.add_argument("--live_rate", type=float, default=350.0, help="live mode: target documents per second")
+parser.add_argument("--live_minutes", type=float, default=0.0, help="live mode: stop after N minutes (0 = until Ctrl-C)")
+parser.add_argument("--checkpoint_dir", default="output/checkpoints",
+                    help="per-worker resume points; a rerun with the same flags continues where it stopped")
+parser.add_argument("--fresh", action="store_true", help="ignore existing checkpoints and start the range from the top")
 parser.add_argument("--repair_log", default=None,
                     help="regenerate and write ONLY the keys a previous run logged as 'upsert failed' in this log file")
 args = parser.parse_args()
@@ -108,6 +123,23 @@ DOC_TYPES = ["order", "check", "cart", "payment", "orderSummary", "transactionDe
 DOC_TO_COLLECTION = {d: d for d in DOC_TYPES}
 DOC_TO_COLLECTION["order"] = "orders"
 COLLECTIONS = list(DOC_TO_COLLECTION.values())
+
+# Retention (--hot_days > 0): only these collections get a TTL and a history copy; they are the ones the
+# Eventing copy functions watch. Everything else (reference data, daily logs, rewards, signatures) stays in
+# the hot scope with no expiry.
+RETENTION_COLLECTIONS = ["cart", "check", "orders", "payment", "orderSummary", "transactionDetail"]
+HOT_MS = args.hot_days * 86_400_000
+MIN_HOT_REMAINING_S = 3600   # a doc due to expire within the hour goes straight to history instead
+
+
+def route_of(name, doc):
+    """Where a document belongs: ("hot", expiry_seconds_or_None) or ("hist", None)."""
+    if args.hot_days <= 0 or name not in RETENTION_COLLECTIONS:
+        return "hot", None
+    remaining = (doc["dateCreated"] + HOT_MS) / 1000 - time.time()
+    if remaining < MIN_HOT_REMAINING_S:
+        return "hist", None
+    return "hot", remaining
 
 # =========================================================
 # SCHEMA-STYLE HELPERS
@@ -1665,6 +1697,15 @@ def make_reference(u):
 # COUCHBASE LOADER
 # =========================================================
 
+def is_permanent(e):
+    """Errors a retry cannot fix (bad document or request). Everything else - timeouts, temporary failures,
+    service unavailable, network drops - is retried until it succeeds."""
+    from couchbase import exceptions as cbx
+    permanent = tuple(getattr(cbx, n) for n in ("InvalidArgumentException", "ValueFormatException",
+                                                 "InvalidValueException", "ValueTooDeepException") if hasattr(cbx, n))
+    return isinstance(e, permanent)
+
+
 class Loader:
     def __init__(self, create=True):
         from couchbase.auth import PasswordAuthenticator
@@ -1683,50 +1724,75 @@ class Loader:
         self.bucket = self.cluster.bucket(args.bucket)
         if create and not args.no_create:
             self._ensure_collections()
+            if args.hot_days > 0:
+                self._ensure_collections(args.history_scope, RETENTION_COLLECTIONS)
         scope = self.bucket.scope(args.scope)
         self.cols = {name: scope.collection(name) for name in COLLECTIONS}
+        hist = self.bucket.scope(args.history_scope)
+        self.hist_cols = {name: hist.collection(name) for name in RETENTION_COLLECTIONS} if args.hot_days > 0 else {}
 
-    def _ensure_collections(self):
+    def _ensure_collections(self, scope_name=None, names=None):
+        scope_name, names = scope_name or args.scope, names or COLLECTIONS
         from couchbase.exceptions import CollectionAlreadyExistsException, ScopeAlreadyExistsException
         mgr = self.bucket.collections()
         try:
-            mgr.create_scope(args.scope)
+            mgr.create_scope(scope_name)
         except ScopeAlreadyExistsException:
             pass
-        for name in COLLECTIONS:
+        for name in names:
             try:
                 try:
-                    mgr.create_collection(args.scope, name)
+                    mgr.create_collection(scope_name, name)
                 except TypeError:
                     from couchbase.management.collections import CollectionSpec
-                    mgr.create_collection(CollectionSpec(name, scope_name=args.scope))
-                log.info(f"created collection {args.scope}.{name}")
+                    mgr.create_collection(CollectionSpec(name, scope_name=scope_name))
+                log.info(f"created collection {scope_name}.{name}")
             except CollectionAlreadyExistsException:
                 pass
         for _ in range(30):
             scopes = {s.name: {c.name for c in s.collections} for s in mgr.get_all_scopes()}
-            if set(COLLECTIONS) <= scopes.get(args.scope, set()):
+            if set(names) <= scopes.get(scope_name, set()):
                 return
             time.sleep(1)
         log.warning("collections not visible in manifest yet; upserts will retry")
 
-    def upsert_many(self, name, docs, retries=7):
-        col = self.cols[name]
-        res = col.upsert_multi(docs)
+    def upsert_many(self, name, docs, target="hot", expiries=None, retries=7):
+        """expiries: {key: absolute expiry, epoch seconds}. The SDK only takes a duration (and turns anything over
+        30 days into an absolute time itself), so the duration is computed here, at the moment of the write:
+        the stored expiry then lands on dateCreated + hot_days no matter how long the doc sat in a buffer."""
+        from couchbase.options import UpsertMultiOptions, UpsertOptions
+        col = self.cols[name] if target == "hot" else self.hist_cols[name]
+        def opts(key):
+            return UpsertOptions(expiry=timedelta(seconds=max(1, round(expiries[key] - time.time())))) if expiries else None
+        if expiries:
+            res = col.upsert_multi(docs, UpsertMultiOptions(per_key_options={k: opts(k) for k in docs}))
+        else:
+            res = col.upsert_multi(docs)
         if res.all_ok:
             return len(docs)
         failed = list(res.exceptions.keys())
         written = len(docs) - len(failed)
         for key in failed:
-            for i in range(retries):
+            i = 0
+            while True:
                 try:
-                    col.upsert(key, docs[key])
+                    if expiries:
+                        col.upsert(key, docs[key], opts(key))
+                    else:
+                        col.upsert(key, docs[key])
                     written += 1
+                    if i >= 3:
+                        log.warning(f"recovered {name}/{key} after {i} retries")
                     break
                 except Exception as e:  # noqa: BLE001
-                    if i == retries - 1:
-                        log.error(f"upsert failed {name}/{key}: {e}")
-                    time.sleep(min(30.0, 0.5 * (2 ** i)))   # give a busy cluster time to recover
+                    if is_permanent(e):
+                        # same text the --repair_log mode parses
+                        log.error(f"upsert failed {name}/{key}: {type(e).__name__}: {e}")
+                        break
+                    i += 1
+                    if i in (3, 10) or i % 30 == 0:
+                        log.warning(f"retrying {name}/{key} (attempt {i}, cluster unreachable or busy): {type(e).__name__}")
+                    time.sleep(min(60.0, 0.5 * (2 ** min(i, 7))))   # an outage pauses the load; nothing is skipped
         return written
 
 # =========================================================
@@ -1753,6 +1819,10 @@ class Progress:
         self.lock = threading.Lock()
         self.every = args.progress_every
 
+    def skip(self, n):
+        with self.lock:
+            self.n += n
+
     def tick(self):
         with self.lock:
             self.n += 1
@@ -1775,28 +1845,88 @@ def split_range(start, end, parts):
     return out
 
 
-def worker(loader, maker, start, end, progress):
-    bufs = {name: {} for name in COLLECTIONS}
-    written = Counter()
+class Buffers:
+    """Per-(target, collection) write buffers. target is "hot" (--scope) or "hist" (--history_scope)."""
+    def __init__(self, loader):
+        self.loader, self.docs, self.exp, self.written = loader, defaultdict(dict), defaultdict(dict), Counter()
 
-    def flush(name):
-        if bufs[name]:
-            written[name] += loader.upsert_many(name, bufs[name])
-            bufs[name] = {}
+    def add(self, name, doc, target, expiry_s):
+        k = (target, name)
+        self.docs[k][doc["_id"]] = dict(sorted(doc.items()))   # source docs are key-sorted
+        if expiry_s is not None:
+            self.exp[k][doc["_id"]] = time.time() + expiry_s   # absolute; converted back to a duration at write time
+        if len(self.docs[k]) >= args.flush_size:
+            self.flush(k)
 
-    for u in range(start, end):
+    def flush(self, k):
+        if self.docs[k]:
+            target, name = k
+            self.written[f"{name}" if target == "hot" else f"{args.history_scope}.{name}"] += \
+                self.loader.upsert_many(name, self.docs[k], target, self.exp[k] or None)
+            self.docs[k], self.exp[k] = {}, {}
+
+    def flush_all(self):
+        for k in list(self.docs):
+            self.flush(k)
+
+
+def wanted(target):
+    if args.hot_days <= 0 or args.route == "split":
+        return True
+    return (target == "hist") == (args.route == "history")
+
+
+CHECKPOINT_EVERY = 2000   # units (orders / location-days / merchants) between resume points
+
+
+def checkpoint_path(phase, start, end):
+    """One file per worker range. The run signature keeps checkpoints from a differently-shaped run apart."""
+    sig = (f"m{args.merchants}-d{DAYS}-e{END_DATE}-s{SEED}-o{NUM_ORDERS}-"
+           f"{'h' + str(args.hot_days) + '-' + args.route if args.hot_days > 0 else 'legacy'}")
+    return Path(args.checkpoint_dir) / sig / f"{phase}_{start}_{end}.json"
+
+
+def read_checkpoint(path, start):
+    if args.fresh or REPAIR_KEYS is not None or not path.exists():
+        return start
+    try:
+        return int(json.loads(path.read_text())["next"])
+    except Exception:  # noqa: BLE001 - a damaged checkpoint just means redoing the range (writes are idempotent)
+        return start
+
+
+def write_checkpoint(path, nxt, done=False):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"next": nxt, "done": done, "at": datetime.now().isoformat(timespec="seconds")}))
+    os.replace(tmp, path)   # atomic: a crash leaves either the old or the new checkpoint, never half of one
+
+
+def worker(loader, maker, start, end, progress, phase="orders"):
+    ck = checkpoint_path(phase, start, end)
+    first = read_checkpoint(ck, start)
+    if first > start:
+        progress.skip(first - start)
+        if first >= end:
+            return Counter()
+        log.info(f"resuming {phase} [{start:,}-{end:,}) at {first:,}")
+    buf = Buffers(loader)
+    for u in range(first, end):
         for doc_type, docs in maker(u).items():
             name = DOC_TO_COLLECTION[doc_type]
             for d in docs:
                 if REPAIR_KEYS is not None and d["_id"] not in REPAIR_KEYS:
                     continue
-                bufs[name][d["_id"]] = dict(sorted(d.items()))   # source docs are key-sorted
-            if len(bufs[name]) >= args.flush_size:
-                flush(name)
+                target, expiry_s = route_of(name, d)
+                if wanted(target):
+                    buf.add(name, d, target, expiry_s)
         progress.tick()
-    for name in COLLECTIONS:
-        flush(name)
-    return written
+        if (u + 1 - start) % CHECKPOINT_EVERY == 0:
+            buf.flush_all()                      # only record progress that is safely written
+            write_checkpoint(ck, u + 1)
+    buf.flush_all()
+    write_checkpoint(ck, end, done=True)
+    return buf.written
 
 
 def run_range(phase, start, end, create=False, label="load"):
@@ -1805,7 +1935,7 @@ def run_range(phase, start, end, create=False, label="load"):
     progress = Progress(f"{phase} {label} [{start:,}-{end:,})", end - start)
     totals = Counter()
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = [ex.submit(worker, loader, maker, s_, e_, progress) for s_, e_ in split_range(start, end, args.workers)]
+        futs = [ex.submit(worker, loader, maker, s_, e_, progress, phase) for s_, e_ in split_range(start, end, args.workers)]
         for f in as_completed(futs):
             totals.update(f.result())
     return dict(totals)
@@ -1814,6 +1944,87 @@ def run_range(phase, start, end, create=False, label="load"):
 def _proc_entry(job):
     phase, i, s_, e_ = job
     return run_range(phase, s_, e_, create=False, label=f"p{i:02d}")
+
+# =========================================================
+# LIVE MODE  (simulated device sync: orders that "just happened")
+# =========================================================
+
+_TS_LO = int(datetime(START_DATE.year, START_DATE.month, START_DATE.day).timestamp() * 1000) - 400 * 86_400_000
+_TS_HI = int(datetime(END_DATE.year, END_DATE.month, END_DATE.day).timestamp() * 1000) + 2 * 86_400_000
+_RECENT_MS = int(datetime(END_DATE.year, END_DATE.month, END_DATE.day).timestamp() * 1000) - 30 * 86_400_000
+
+
+def _timestamps(o, out):
+    if isinstance(o, dict):
+        for v in o.values():
+            _timestamps(v, out)
+    elif isinstance(o, list):
+        for v in o:
+            _timestamps(v, out)
+    elif isinstance(o, int) and not isinstance(o, bool) and _TS_LO <= o <= _TS_HI:
+        out.append(o)
+
+
+def _shift(o, delta):
+    """Move every epoch-ms value in the window by delta; leaves amounts, counts, 0 sentinels and strings alone."""
+    if isinstance(o, dict):
+        return {k: _shift(v, delta) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_shift(v, delta) for v in o]
+    if isinstance(o, int) and not isinstance(o, bool) and _TS_LO <= o <= _TS_HI:
+        return o + delta
+    return o
+
+
+def live_order(g, rng):
+    """A generated order from the last 30 days of the timeline, shifted so its latest timestamp is ~now."""
+    while True:
+        b = make_order(g[0])
+        g[0] += 1
+        if b["order"][0]["dateCreated"] >= _RECENT_MS:
+            break
+    ts = []
+    _timestamps(b, ts)
+    delta = int(time.time() * 1000) - rng.randint(0, 120_000) - max(ts)
+    return {dt: [_shift(d, delta) for d in docs] for dt, docs in b.items()}
+
+
+def live_run():
+    loader = Loader(create=not args.no_create)
+    buf = Buffers(loader)
+    rng = random.Random()
+    g = [10**12 + int(time.time()) * 1000]   # far above any backfill order number; unique per restart
+    orders_per_s = args.live_rate / 9.13
+    t0 = last_log = time.time()
+    sent, debt = 0, 0.0
+    stop_at = t0 + args.live_minutes * 60 if args.live_minutes > 0 else None
+    log.info(f"LIVE start: ~{args.live_rate:,.0f} docs/s (~{orders_per_s:,.1f} orders/s) into {args.bucket}.{args.scope} "
+             f"{'with TTL ' + str(args.hot_days) + 'd' if args.hot_days > 0 else 'without TTL'}; first g={g[0]}")
+    try:
+        prev = time.time()
+        while stop_at is None or time.time() < stop_at:
+            tick = time.time()
+            debt += orders_per_s * (tick - prev)   # credit real elapsed time, so slow flushes don't lower the rate
+            prev = tick
+            while debt >= 1:
+                for doc_type, docs in live_order(g, rng).items():
+                    name = DOC_TO_COLLECTION[doc_type]
+                    for d in docs:
+                        target, expiry_s = route_of(name, d)
+                        buf.add(name, d, target, expiry_s)
+                debt -= 1
+                sent += 1
+            buf.flush_all()
+            if time.time() - last_log >= 60:
+                el = time.time() - t0
+                total = sum(buf.written.values())
+                log.info(f"LIVE {el / 60:,.1f} min: {sent:,} orders, {total:,} docs ({total / el:,.0f} docs/s)")
+                last_log = time.time()
+            time.sleep(max(0.0, 1.0 - (time.time() - tick)))
+    except KeyboardInterrupt:
+        log.info("LIVE stopping (Ctrl-C)")
+    buf.flush_all()
+    log.info(f"LIVE DONE {dict(buf.written)} orders={sent:,} next g={g[0]}")
 
 # =========================================================
 # DRY RUN REPORT
@@ -1905,9 +2116,13 @@ def main():
     if args.dry_run:
         dry_run()
         return
+    if args.live:
+        live_run()
+        return
     log.info(f"QUANTIC LOAD bucket={args.bucket} scope={args.scope} phases={phases} merchants={len(MERCHANTS)} "
              f"locations={len(LOCATIONS)} orders={NUM_ORDERS:,} window={START_DATE}..{LAST_DATE} "
-             f"processes={args.processes} workers={args.workers}")
+             f"processes={args.processes} workers={args.workers} "
+             f"retention={'hot_days=' + str(args.hot_days) + ' route=' + args.route + ' history=' + args.history_scope if args.hot_days > 0 else 'off'}")
     if not args.no_create:
         Loader(create=True).cluster.close()
     grand = Counter()
